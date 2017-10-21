@@ -5,6 +5,7 @@ import (
 	"io"
 	"bufio"
 	"fmt"
+	"sync"
 )
 
 var (
@@ -16,31 +17,34 @@ type File struct {
 	io.ReadCloser
 	Name           string
 	closefn        func() error
+	wg *sync.WaitGroup
 }
 
 func (fd *File) Close() {
-	<- ticket
 	fd.closefn()
+	fd.wg.Done()
+	<- ticket
 }
 
 func emit(to chan *File, args ...string) {
+	var wg = new(sync.WaitGroup)
 	if len(args) == 0 {
 		ticket <- struct{}{}
-		to <- &File{os.Stdin, "/dev/stdin", os.Stdin.Close}
+		wg.Add(1)
+		to <- &File{os.Stdin, "/dev/stdin", os.Stdin.Close, wg}
 		close(to)
-		<- ticket
 		return
 	}
 
 	emitfd := func(n string) {
 		ticket <- struct{}{}
+		wg.Add(1)
 		fd, err := os.Open(n)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			fd.Close()
-			<-ticket
 		} else {
-			to <- &File{Name: n, ReadCloser: fd, closefn: fd.Close}
+			to <- &File{Name: n, ReadCloser: fd, closefn: fd.Close, wg: wg}
 		}
 	}
 
@@ -54,6 +58,8 @@ func emit(to chan *File, args ...string) {
 			}
 		}
 	}
+	wg.Wait()
+	close(ticket)
 	close(to)
 }
 
