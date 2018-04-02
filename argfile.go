@@ -18,12 +18,19 @@ type File struct {
 	Name           string
 	closefn        func() error
 	wg *sync.WaitGroup
+	cap chan bool
 }
 
 func (fd *File) Close() {
-	fd.closefn()
-	fd.wg.Done()
-	<- ticket
+	select{
+	case clean := <-fd.cap:
+		if clean{
+			fd.closefn()
+			fd.wg.Done()
+			<- ticket
+		}
+	default:
+	}
 }
 
 func emit(to chan *File, args ...string) {
@@ -31,7 +38,9 @@ func emit(to chan *File, args ...string) {
 	if len(args) == 0 {
 		ticket <- struct{}{}
 		wg.Add(1)
-		to <- &File{os.Stdin, "/dev/stdin", os.Stdin.Close, wg}
+		ff := &File{os.Stdin, "/dev/stdin", os.Stdin.Close, wg, make(chan bool, 1)}
+		ff.cap <- true // capcability to call close and clean up resources exactly once
+		to <- ff
 		close(to)
 		return
 	}
@@ -44,7 +53,9 @@ func emit(to chan *File, args ...string) {
 			fmt.Fprintln(os.Stderr, err)
 			fd.Close()
 		} else {
-			to <- &File{Name: n, ReadCloser: fd, closefn: fd.Close, wg: wg}
+			ff := &File{Name: n, ReadCloser: fd, closefn: fd.Close, wg: wg, cap: make(chan bool, 1)}
+			ff.cap <- true // capcability to call close and clean up resources exactly once
+			to <- ff
 		}
 	}
 
